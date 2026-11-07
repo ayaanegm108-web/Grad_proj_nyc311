@@ -1,8 +1,28 @@
-import csv, datetime, pathlib, requests
+import csv, datetime, os, pathlib, requests, time
 
 BASE = "https://data.cityofnewyork.us/resource/erm2-nwe9.csv"
 OUT = pathlib.Path("data")
 OUT.mkdir(exist_ok=True)
+
+
+def get_page(params):
+    headers = {}
+    token = os.environ.get("SOCRATA_APP_TOKEN")
+    if token:
+        headers["X-App-Token"] = token
+    r = None
+    for attempt in range(8):
+        r = requests.get(BASE, params=params, headers=headers, timeout=300)
+        if r.status_code in (429, 500, 502, 503, 504):
+            wait = min(30 * (attempt + 1), 300)
+            print(f"HTTP {r.status_code}, retrying in {wait}s", flush=True)
+            time.sleep(wait)
+            continue
+        r.raise_for_status()
+        time.sleep(1)
+        return r
+    r.raise_for_status()
+
 
 def fetch_year(y):
     where = f"created_date >= '{y}-01-01T00:00:00' AND created_date < '{y+1}-01-01T00:00:00'"
@@ -17,8 +37,7 @@ def fetch_year(y):
             "$limit": limit,
             "$offset": offset,
         }
-        r = requests.get(BASE, params=params, timeout=300)
-        r.raise_for_status()
+        r = get_page(params)
         batch = list(csv.reader(r.text.splitlines()))
         header, data = batch[0], batch[1:]
         rows += data
@@ -29,10 +48,10 @@ def fetch_year(y):
         w = csv.writer(f)
         w.writerow(header)
         w.writerows(rows)
-    print(y, len(rows), "rows")
+    print(y, len(rows), "rows", flush=True)
+
 
 this_year = datetime.date.today().year
 for y in range(2020, this_year + 1):
-    # السنوات القديمة بتتسحب مرة واحدة، والسنة الحالية بتتحدث كل يوم
     if y == this_year or not (OUT / f"{y}.csv").exists():
         fetch_year(y)
