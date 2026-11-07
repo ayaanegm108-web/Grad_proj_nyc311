@@ -21,6 +21,8 @@ jobs:
             git restore --source=FETCH_HEAD --worktree -- data/raw
           fi
       - run: python fetch.py
+        env:
+          SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
       - run: python fetch_raw.py
         env:
           SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
