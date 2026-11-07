@@ -1,4 +1,4 @@
-import csv, datetime, gzip, io, pathlib, requests
+import csv, datetime, gzip, io, os, pathlib, requests, time
 
 BASE = "https://data.cityofnewyork.us/resource/erm2-nwe9.csv"
 YEAR = 2026
@@ -7,6 +7,26 @@ ROWS_PER_PART = 150000
 OUT = pathlib.Path("data/raw")
 OUT.mkdir(parents=True, exist_ok=True)
 today = datetime.date.today()
+
+
+def get_page(params):
+    headers = {}
+    token = os.environ.get("SOCRATA_APP_TOKEN")
+    if token:
+        headers["X-App-Token"] = token
+    r = None
+    for attempt in range(8):
+        r = requests.get(BASE, params=params, headers=headers, timeout=300)
+        if r.status_code in (429, 500, 502, 503, 504):
+            wait = min(30 * (attempt + 1), 300)
+            print(f"HTTP {r.status_code}, retrying in {wait}s", flush=True)
+            time.sleep(wait)
+            continue
+        r.raise_for_status()
+        time.sleep(1)
+        return r
+    r.raise_for_status()
+
 
 def fetch_month(y, m):
     start = datetime.date(y, m, 1)
@@ -17,10 +37,9 @@ def fetch_month(y, m):
     offset, part, in_part, total = 0, 0, 0, 0
     f = w = None
     while True:
-        r = requests.get(BASE, params={
+        r = get_page({
             "$where": where, "$order": "unique_key",
-            "$limit": PAGE, "$offset": offset}, timeout=300)
-        r.raise_for_status()
+            "$limit": PAGE, "$offset": offset})
         rows = list(csv.reader(io.StringIO(r.text)))
         header, data = rows[0], rows[1:]
         if not data:
@@ -43,7 +62,8 @@ def fetch_month(y, m):
         offset += PAGE
     if f:
         f.close()
-    print(f"{y}-{m:02d}: {total} rows, {len(data) and part} parts")
+    print(f"{y}-{m:02d}: {total} rows, {part} parts", flush=True)
+
 
 for m in range(1, 13):
     if datetime.date(YEAR, m, 1) > today:
