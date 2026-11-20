@@ -1,9 +1,11 @@
 import csv, datetime, os, pathlib, requests, sys, time
 
 BASE = "https://data.cityofnewyork.us/resource/erm2-nwe9.csv"
+LOOKBACK_DAYS = int(os.environ.get("LOOKBACK_DAYS", "30"))
 OUT = pathlib.Path("data")
 OUT.mkdir(exist_ok=True)
 today = datetime.date.today()
+cutoff = today - datetime.timedelta(days=LOOKBACK_DAYS)
 
 
 def get_page(params):
@@ -29,9 +31,7 @@ def get_page(params):
     raise RuntimeError("too many failed attempts")
 
 
-def fetch_month(y, m):
-    start = datetime.date(y, m, 1)
-    end = datetime.date(y + (m == 12), (m % 12) + 1, 1)
+def fetch_range(start, end):
     where = f"created_date >= '{start}T00:00:00' AND created_date < '{end}T00:00:00'"
     rows, offset, limit, header = [], 0, 50000, None
     while True:
@@ -53,29 +53,49 @@ def fetch_month(y, m):
     return header, rows
 
 
-def fetch_year(y):
-    all_rows, header = [], None
-    for m in range(1, 13):
-        if datetime.date(y, m, 1) > today:
-            break
-        h, rows = fetch_month(y, m)
-        header = header or h
-        all_rows += rows
+def write_year(y, header, rows):
+    rows = [r for r in rows if r]
+    rows.sort(key=lambda r: (r[0], r[1], r[2]))
     with open(OUT / f"{y}.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(header)
-        w.writerows(all_rows)
-    print(y, len(all_rows), "rows", flush=True)
+        w.writerows(rows)
+    print(y, len(rows), "rows", flush=True)
+
+
+def full_year(y):
+    header, all_rows = None, []
+    for m in range(1, 13):
+        s = datetime.date(y, m, 1)
+        if s > today:
+            break
+        e = datetime.date(y + (m == 12), (m % 12) + 1, 1)
+        h, rows = fetch_range(s, e)
+        header = header or h
+        all_rows += rows
+    write_year(y, header, all_rows)
+
+
+def update_year(y):
+    start = max(cutoff, datetime.date(y, 1, 1))
+    with open(OUT / f"{y}.csv", newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        keep = [r for r in reader if r and r[0] < f"{start}T00:00:00"]
+    _, new = fetch_range(start, datetime.date(y + 1, 1, 1))
+    write_year(y, header, keep + new)
 
 
 failed = []
 for y in range(2020, today.year + 1):
-    if y == today.year or not (OUT / f"{y}.csv").exists():
-        try:
-            fetch_year(y)
-        except Exception as e:
-            print(f"FAILED {y}: {e}", flush=True)
-            failed.append(y)
+    try:
+        if not (OUT / f"{y}.csv").exists():
+            full_year(y)
+        elif y >= cutoff.year:
+            update_year(y)
+    except Exception as e:
+        print(f"FAILED {y}: {e}", flush=True)
+        failed.append(y)
 
 print("failed years:", failed)
 sys.exit(1 if failed else 0)
