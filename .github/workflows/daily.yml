@@ -24,6 +24,7 @@ jobs:
         env:
           SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
       - run: python fetch_raw.py
+        continue-on-error: true
         env:
           SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
       - name: commit aggregated data to main
